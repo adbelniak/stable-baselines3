@@ -12,6 +12,7 @@ from stable_baselines3.common.policies import ActorCriticPolicy, BasePolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import obs_as_tensor, safe_mean
 from stable_baselines3.common.vec_env import VecEnv
+from torch.utils.tensorboard import SummaryWriter
 
 
 class OnPolicyAlgorithm(BaseAlgorithm):
@@ -183,7 +184,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             callback.update_locals(locals())
             if callback.on_step() is False:
                 return False
-
             self._update_info_buffer(infos)
             n_steps += 1
 

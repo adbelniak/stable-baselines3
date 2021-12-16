@@ -20,7 +20,7 @@ class Distribution(ABC):
         self.distribution = None
 
     @abstractmethod
-    def proba_distribution_net(self, *args, **kwargs) -> Union[nn.Module, Tuple[nn.Module, nn.Parameter]]:
+    def proba_distribution_net(self, *args, **kwargs) -> Union[List[nn.Module], nn.Module, Tuple[nn.Module, nn.Parameter]]:
         """Create the layers and parameters that represent the distribution.
 
         Subclasses must define this, but the arguments and return type vary between
@@ -95,6 +95,9 @@ class Distribution(ABC):
 
         :return: actions and log prob
         """
+
+    def sample_all(self, latent_pi):
+        return None
 
 
 def sum_independent_dims(tensor: th.Tensor) -> th.Tensor:
@@ -344,6 +347,84 @@ class MultiCategoricalDistribution(Distribution):
     def actions_from_params(self, action_logits: th.Tensor, deterministic: bool = False) -> th.Tensor:
         # Update the proba distribution
         self.proba_distribution(action_logits)
+        return self.get_actions(deterministic=deterministic)
+
+    def log_prob_from_params(self, action_logits: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        actions = self.actions_from_params(action_logits)
+        log_prob = self.log_prob(actions)
+        return actions, log_prob
+
+    def sample_all(self, latent):
+        return None
+
+class ConditionalCategoricalDistribution(Distribution):
+    """
+    MultiCategorical distribution for multi discrete actions.
+
+    :param action_dims: List of sizes of discrete action spaces
+    """
+
+    def __init__(self, action_dims: List[int]):
+        super(ConditionalCategoricalDistribution, self).__init__()
+        self.action_dims = action_dims
+        self.embedding = nn.Embedding(sum(action_dims[:-1]), 4)
+        self.actions_net = nn.ModuleList([nn.Linear(x + input_dim, x) for input_dim, x in zip([0, 4, 4], action_dims)])
+
+    def proba_distribution_net(self, latent_dim: int, ) -> Tuple[nn.Module]:
+        """
+        Create the layer that represents the distribution:
+        it will be the logits (flattened) of the MultiCategorical distribution.
+        You can then get probabilities using a softmax on each sub-space.
+
+        :param latent_dim: Dimension of the last layer
+            of the policy network (before the action layer)
+        :return:
+        """
+
+        action_logits = nn.Sequential(nn.Linear(latent_dim, sum(self.action_dims)), nn.ReLU())
+        # action_logits = nn.Tanh()(nn.Linear(latent_dim, sum(self.action_dims)))
+        return action_logits, self.embedding, self.actions_net
+
+    def proba_distribution(self, action_logits: th.Tensor,) -> "MultiCategoricalDistribution":
+        self.distribution = [Categorical(logits=split) for split in th.split(action_logits, tuple(self.action_dims), dim=1)]
+        return self
+
+    def log_prob(self, actions: th.Tensor) -> th.Tensor:
+        # Extract each discrete action and compute log prob for their respective distributions
+        return th.stack(
+            [dist.log_prob(action) for dist, action in zip(self.distribution, th.unbind(actions, dim=1))], dim=1
+        ).sum(dim=1)
+
+    def entropy(self) -> th.Tensor:
+        return th.stack([dist.entropy() for dist in self.distribution], dim=1).sum(dim=1)
+
+    def sample(self) -> th.Tensor:
+        return th.stack([dist.sample() for dist in self.distribution], dim=1)
+
+    def sample_all(self, latent):
+        self.distribution = []
+        actions = []
+        # with th.no_grad():
+        split_latent = th.split(latent, tuple(self.action_dims), dim=1)
+        logits = self.actions_net[0](split_latent[0])
+        # logits = split_latent[0]
+        self.distribution.append(Categorical(logits=logits))
+        top_action = self.distribution[-1].sample()
+        actions.append(top_action)
+        for i, (net, splited_latent) in enumerate(zip(self.actions_net[1:], split_latent[1:])):
+            top_action_no_grad = top_action.detach()
+            embedded_action = self.embedding(top_action_no_grad + bool(i) * self.action_dims[i])
+            logits = net(th.cat([splited_latent, embedded_action], dim=1))
+            self.distribution.append(Categorical(logits=logits))
+            top_action = self.distribution[-1].sample()
+            actions.append(top_action)
+        return th.stack(actions, dim=1), self
+
+    def mode(self) -> th.Tensor:
+        return th.stack([th.argmax(dist.probs, dim=1) for dist in self.distribution], dim=1)
+
+    def actions_from_params(self, action_logits: th.Tensor, deterministic: bool = False) -> th.Tensor:
+        # Update the proba distribution
         return self.get_actions(deterministic=deterministic)
 
     def log_prob_from_params(self, action_logits: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
@@ -666,6 +747,8 @@ def make_proba_distribution(
         return MultiCategoricalDistribution(action_space.nvec, **dist_kwargs)
     elif isinstance(action_space, spaces.MultiBinary):
         return BernoulliDistribution(action_space.n, **dist_kwargs)
+    elif isinstance(action_space, spaces.MultiDiscrete):
+        return ConditionalCategoricalDistribution(action_space.nvec, **dist_kwargs)
     else:
         raise NotImplementedError(
             "Error: probability distribution, not implemented for action space"
