@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import gym
+import numpy as np
+import torch
 import torch as th
 from gym import spaces
 from torch import nn
@@ -368,7 +370,8 @@ class ConditionalCategoricalDistribution(Distribution):
         super(ConditionalCategoricalDistribution, self).__init__()
         self.action_dims = action_dims
         self.embedding = nn.Embedding(sum(action_dims[:-1]), 4)
-        self.actions_net = nn.ModuleList([nn.Linear(x + input_dim, x) for input_dim, x in zip([0, 4, 4], action_dims)])
+        self.actions_net = nn.ModuleList([nn.Linear(x + input_dim, x) for input_dim, x in zip([0, 4, 8], action_dims)])
+        self.action_encoder = torch.from_numpy(np.array([list(np.binary_repr(x, width=4)) for x in range(16)]).astype(np.int8))
 
     def proba_distribution_net(self, latent_dim: int, ) -> Tuple[nn.Module]:
         """
@@ -381,8 +384,7 @@ class ConditionalCategoricalDistribution(Distribution):
         :return:
         """
 
-        action_logits = nn.Sequential(nn.Linear(latent_dim, sum(self.action_dims)), nn.ReLU())
-        # action_logits = nn.Tanh()(nn.Linear(latent_dim, sum(self.action_dims)))
+        action_logits = nn.Sequential(nn.Linear(latent_dim, sum(self.action_dims)), nn.Tanh())
         return action_logits, self.embedding, self.actions_net
 
     def proba_distribution(self, action_logits: th.Tensor,) -> "MultiCategoricalDistribution":
@@ -411,9 +413,9 @@ class ConditionalCategoricalDistribution(Distribution):
         self.distribution.append(Categorical(logits=logits))
         top_action = self.distribution[-1].sample()
         actions.append(top_action)
-        for i, (net, splited_latent) in enumerate(zip(self.actions_net[1:], split_latent[1:])):
-            top_action_no_grad = top_action.detach()
-            embedded_action = self.embedding(top_action_no_grad + bool(i) * self.action_dims[i])
+        for (net, splited_latent) in zip(self.actions_net[1:], split_latent[1:]):
+            embedded_action = th.cat([self.action_encoder[bool(i) * self.action_dims[i] + action.detach()] for i, action in enumerate(actions)], dim=1)
+            # embedded_action = self.action_encoder[top_action_no_grad + bool(i) * self.action_dims[i]]
             logits = net(th.cat([splited_latent, embedded_action], dim=1))
             self.distribution.append(Categorical(logits=logits))
             top_action = self.distribution[-1].sample()
@@ -743,8 +745,8 @@ def make_proba_distribution(
         return cls(get_action_dim(action_space), **dist_kwargs)
     elif isinstance(action_space, spaces.Discrete):
         return CategoricalDistribution(action_space.n, **dist_kwargs)
-    elif isinstance(action_space, spaces.MultiDiscrete):
-        return MultiCategoricalDistribution(action_space.nvec, **dist_kwargs)
+    # elif isinstance(action_space, spaces.MultiDiscrete):
+    #     return MultiCategoricalDistribution(action_space.nvec, **dist_kwargs)
     elif isinstance(action_space, spaces.MultiBinary):
         return BernoulliDistribution(action_space.n, **dist_kwargs)
     elif isinstance(action_space, spaces.MultiDiscrete):
