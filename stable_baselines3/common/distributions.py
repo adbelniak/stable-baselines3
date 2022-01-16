@@ -745,8 +745,8 @@ def make_proba_distribution(
         return cls(get_action_dim(action_space), **dist_kwargs)
     elif isinstance(action_space, spaces.Discrete):
         return CategoricalDistribution(action_space.n, **dist_kwargs)
-    # elif isinstance(action_space, spaces.MultiDiscrete):
-    #     return MultiCategoricalDistribution(action_space.nvec, **dist_kwargs)
+    elif isinstance(action_space, spaces.MultiDiscrete):
+        return MultiCategoricalDistribution(action_space.nvec, **dist_kwargs)
     elif isinstance(action_space, spaces.MultiBinary):
         return BernoulliDistribution(action_space.n, **dist_kwargs)
     elif isinstance(action_space, spaces.MultiDiscrete):
