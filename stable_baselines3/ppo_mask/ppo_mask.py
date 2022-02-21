@@ -286,7 +286,7 @@ class MaskablePPO(OnPolicyAlgorithm):
         # Configure logger's outputs if no logger was passed
         if not self._custom_logger:
             self._logger = utils.configure_logger(self.verbose, self.tensorboard_log, tb_log_name, reset_num_timesteps)
-
+        self.env.logger = self._logger
         # Create eval callback if needed
         callback = self._init_callback(callback, eval_env, eval_freq, n_eval_episodes, log_path, use_masking)
 
